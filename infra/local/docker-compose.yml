@@ -1,0 +1,219 @@
+services:
+  localstack:
+    container_name: "${COMPOSE_PROJECT_NAME}-localstack"
+    image: localstack/localstack
+    ports:
+      - 4566:4566
+    environment:
+      - DEBUG=${DEBUG:-0}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - SERVICES=sqs,sns,s3,sts,dynamodb,secretsmanager
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - WAIT_FOR_READY=1
+      - EAGER_SERVICE_LOADING=1
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - ${NETWORK_NAME}
+    healthcheck:
+      test: curl --fail http://localhost:4566/_localstack/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    profiles: ["all", "infra"]
+
+  database:
+    container_name: "${COMPOSE_PROJECT_NAME}-database"
+    image: postgres:15.3-alpine3.18
+    networks:
+      - ${NETWORK_NAME}
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER}"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+    profiles: ["all", "db", "infra"]
+
+  flyway:
+    container_name: "${COMPOSE_PROJECT_NAME}-flyway"
+    image: flyway/flyway:11.2.0
+    networks:
+      - ${NETWORK_NAME}
+    volumes:
+      - ../../flyway/all/order-management-system:/flyway/sql
+    environment:
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_URL: jdbc:postgresql://database/${DATABASE_NAME}
+      FLYWAY_USER: ${DATABASE_USER}
+      FLYWAY_PASSWORD: ${DATABASE_PASSWORD}
+      FLYWAY_CONNECT_RETRIES: 10
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+    command: migrate
+    depends_on:
+      database:
+        condition: service_healthy
+    profiles: ["all", "db", "infra"]
+
+  aws-setup:
+    container_name: "${COMPOSE_PROJECT_NAME}-aws-setup"
+    image: amazon/aws-cli
+    env_file:
+      - .env
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_DEFAULT_REGION=${AWS_REGION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    networks:
+      - ${NETWORK_NAME}
+    depends_on:
+      localstack:
+        condition: service_healthy
+    entrypoint: ""
+    command: >
+      bash -c '
+        set -e
+        
+        echo "Waiting for LocalStack..."
+        while ! curl -s http://localstack:4566/_localstack/health > /dev/null; do
+          sleep 1
+        done
+        echo "LocalStack is ready!"
+        
+        # S3 bucket creation with error handling
+        echo "Creating S3 bucket..."
+        if aws --endpoint-url=$${AWS_ENDPOINT_URL} s3api head-bucket --bucket $${BUCKET_NAME} 2>/dev/null; then
+          echo "Bucket $${BUCKET_NAME} already exists"
+        else
+          aws --endpoint-url=$${AWS_ENDPOINT_URL} s3 mb s3://$${BUCKET_NAME} && echo "Bucket created successfully" || { echo "Failed to create bucket: $?"; exit 1; }
+        fi
+        
+        echo "Creating SQS queue..."
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sqs create-queue \
+          --queue-name $${SQS_QUEUE_NAME} \
+          --attributes "{\"ReceiveMessageWaitTimeSeconds\":\"20\"}" || { echo "Failed to create SQS queue: $?"; exit 1; }
+        
+        echo "Creating SNS topic..."
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sns create-topic \
+          --name $${SNS_TOPIC_NAME} || { echo "Failed to create SNS topic: $?"; exit 1; }
+        
+        echo "Setting up SNS-SQS subscription..."
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sns subscribe \
+          --topic-arn $${SNS_TOPIC_ARN} \
+          --protocol sqs \
+          --notification-endpoint $${SQS_QUEUE_ARN} \
+          --attributes "{\"RawMessageDelivery\":\"true\"}" || { echo "Failed to subscribe SQS to SNS: $?"; exit 1; }
+
+        # DynamoDB table creation with error handling
+        echo "Creating DynamoDB table..."
+        if aws --endpoint-url=$${AWS_ENDPOINT_URL} dynamodb describe-table --table-name order-metadata 2>/dev/null; then
+          echo "DynamoDB table order-metadata already exists"
+        else
+          aws --endpoint-url=$${AWS_ENDPOINT_URL} dynamodb create-table \
+            --table-name order-metadata \
+            --attribute-definitions AttributeName=OrderId,AttributeType=S \
+            --key-schema AttributeName=OrderId,KeyType=HASH \
+            --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 && echo "DynamoDB table created successfully" || { echo "Failed to create DynamoDB table: $?"; exit 1; }
+        fi
+        
+        # Secret creation with error handling
+        echo "Creating Database Secrets in Secrets Manager..."
+        SECRET_EXISTS=$(aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager list-secrets --query "SecretList[?Name=='\''$${DATABASE_CREDENTIALS_SECRET_ID}'\''].Name" --output text)
+        if [ "$SECRET_EXISTS" != "" ]; then
+          echo "Secret $${DATABASE_CREDENTIALS_SECRET_ID} already exists"
+        else
+          aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager create-secret \
+              --name $${DATABASE_CREDENTIALS_SECRET_ID} \
+              --description "Database credentials for OMS" \
+              --secret-string "$${DATABASE_CREDENTIALS_SECRET_STRING}" || { echo "Failed to create database secret: $?"; exit 1; }
+        fi
+
+        echo "Creating API Key Secrets in Secrets Manager..."
+        SECRET_EXISTS=$(aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager list-secrets --query "SecretList[?Name=='\''$${API_KEY_SECRET_ID}'\''].Name" --output text)
+        if [ "$SECRET_EXISTS" != "" ]; then
+          echo "Secret $${API_KEY_SECRET_ID} already exists"
+        else
+          aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager create-secret \
+              --name $${API_KEY_SECRET_ID} \
+              --description "API Key credentials for OMS" \
+              --secret-string "$${API_KEY_SECRET_STRING}" || { echo "Failed to create API key secret: $?"; exit 1; }
+        fi
+        
+        # Verify resources
+        echo "Verifying created resources..."
+        echo "S3 Buckets:"
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} s3 ls || { echo "Failed to list S3 buckets: $?"; exit 1; }
+        
+        echo "SQS Queues:"
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sqs list-queues || { echo "Failed to list SQS queues: $?"; exit 1; }
+        
+        echo "SNS Topics:"
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sns list-topics || { echo "Failed to list SNS topics: $?"; exit 1; }
+        
+        echo "Queue Attributes:"
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} sqs get-queue-attributes \
+          --queue-url $${SQS_QUEUE_URL} \
+          --attribute-names All || { echo "Failed to get queue attributes: $?"; exit 1; }
+
+        echo "Verifying DynamoDB table..."
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} dynamodb list-tables || { echo "Failed to list DynamoDB tables: $?"; exit 1; }
+
+        echo "Verifying Secrets..."
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager get-secret-value \
+          --secret-id $${DATABASE_CREDENTIALS_SECRET_ID} || { echo "Failed to get database secret: $?"; exit 1; }
+
+        aws --endpoint-url=$${AWS_ENDPOINT_URL} secretsmanager get-secret-value \
+          --secret-id $${API_KEY_SECRET_ID} || { echo "Failed to get API key secret: $?"; exit 1; }
+          
+        echo "AWS setup completed successfully!"
+      '
+    profiles: ["all", "infra"]
+
+  order-management-api:
+    container_name: "${COMPOSE_PROJECT_NAME}-api"
+    image: localstack-demo:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - ${NETWORK_NAME}
+    ports:
+      - 8080:8080
+    env_file:
+      - .env
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ASPNETCORE_URLS=http://+:8080
+      - DATABASE_CREDENTIALS_SECRET_ID=oms-db-secret
+      - API_KEY_SECRET_ID=oms-api-key 
+    depends_on:
+      database:
+        condition: service_healthy
+      aws-setup:
+        condition: service_completed_successfully
+      flyway:
+        condition: service_completed_successfully
+    profiles: ["all"]
+
+volumes:
+  postgres_data:
+    name: ${COMPOSE_PROJECT_NAME}-postgres-data
+  localstack-data:
+    name: ${COMPOSE_PROJECT_NAME}-localstack-data
+
+networks:
+  demo-network:
+    name: ${NETWORK_NAME}
+    driver: bridge

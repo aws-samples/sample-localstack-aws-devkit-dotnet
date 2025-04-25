@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="AWSSDK.S3" Version="3.7.413.2" />
+        <PackageReference Include="AWSSDK.SecretsManager" Version="3.7.400.123" />
+        <PackageReference Include="AWSSDK.SimpleNotificationService" Version="3.7.400.87" />
+        <PackageReference Include="AWSSDK.SQS" Version="3.7.400.87" />
+        <PackageReference Include="AWSSDK.DynamoDBv2" Version="3.7.405.14" />
+        <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.1" />
+        <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\OrderManagementSystem.Configurations\OrderManagementSystem.Configurations.csproj" />
+    </ItemGroup>
+	
+</Project>
