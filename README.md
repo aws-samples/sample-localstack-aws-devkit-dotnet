@@ -220,53 +220,25 @@ https://documentation.red-gate.com/fd/migrations-271585107.html
 
 Execute these commands from within the LocalStack container.
 
-### SQS Commands
-
 ```bash
-# List all SQS queues
+# SQS Commands
 awslocal sqs list-queues
-
-# Receive message from queue
 awslocal sqs receive-message --queue-url "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/order-queue"
-```
 
-### SNS Commands
-
-```bash
-# List all SNS topics
+# SNS Commands
 awslocal sns list-topics
-
-# List all SNS subscriptions
 awslocal sns list-subscriptions
-
-# Publish message to Topic
 awslocal sns publish --topic-arn "arn:aws:sns:us-east-1:000000000000:order-topic" --message "{\"Key\":\"sample\"}}"
-```
 
-### S3 Commands
-
-```bash
-# List S3 bucket content
+# S3 Commands
 awslocal s3 ls s3://order-bucket --recursive
-
-# Copy a file from S3 bucket
 awslocal s3 cp s3://order-bucket/orders/6.json .
-```
 
-### DynamoDB Commands
-
-```bash
-# List all DynamoDB tables
+# DynamoDB Commands
 awslocal dynamodb list-tables
-
-# Scan a DynamoDB table
 awslocal dynamodb scan --table-name order-metadata
-```
 
-### Secrets Manager Commands
-
-```bash
-# Get Secret
+# Secrets Manager Commands
 awslocal secretsmanager get-secret-value --secret-id oms-api-key
 ```
 
