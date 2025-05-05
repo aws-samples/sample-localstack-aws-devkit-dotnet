@@ -1,6 +1,6 @@
 # LocalStack AWS Dev Kit for .NET
 
-This project provides a reference implementation for setting up a local AWS cloud stack using LocalStack, with automated resource creation for Amazon Simple Storage Service (S3), Simple Queue Service (SQS), Simple Notification Service (SNS), and DynamoDB. The project includes a sample Web API (Order Management System) that connects to a local PostgreSQL database created using Flyway migrations.
+This project provides a reference implementation for setting up a local AWS cloud stack using LocalStack, with automated resource creation for Amazon Simple Storage Service (S3), Simple Queue Service (SQS), Simple Notification Service (SNS), Secrets Manager and DynamoDB. The project includes a sample Web API (Order Management System) that connects to a local PostgreSQL database created using Flyway migrations.
 
 Treat this code as a proof of concept (POC) and not for production use.
 
@@ -12,7 +12,7 @@ https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-
 
 ## Key Benefits
 
-- Cost Savings: Develop and test without AWS charges.
+- Cost Savings: Lower AWS charges during development and testing stages.
 - Fast Development: Speed up feedback loops with local services.
 - Easy Testing: Create repeatable, isolated tests with mock AWS services.
 - AWS Compatibility: Run the same code with real AWS services.
@@ -56,22 +56,21 @@ https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-
 
 The application retrieves database credentials and API Key from AWS Secrets Manager. For local development with LocalStack, configure these values in the `infra/local/.env` file. The default configuration contains placeholders you must replace with actual values.
 
-1. Locate the placeholders in the configuration:
-   ```json
+Locate the placeholders for DB password (`<DB_PASSWORD>`) and API key (`<API_KEY>`) in the configuration and replace with actual values:
+   ```
    DATABASE_CREDENTIALS_SECRET_STRING={"Host": "database","Database":"order-management-system", "Port": "5432", "Username": "postgres", "Password": "<DB_PASSWORD>"}
    API_KEY_SECRET_STRING={"ApiKey":"<API_KEY>"}
    ```
    
-2. Replace `<DB_PASSWORD>` and `<API_KEY>` with your actual values.
-
-The database 'host' value differs between environments:
-- For localhost: Use `"host":"localhost"` in the connection string
-- For Docker: Use `"host":"database"` in the connection string (container name in docker-compose)
+The database 'host' value, in the connection string, differs between environments:
+- For localhost, i.e., when running the API from Visual Studio or CLI: Use `"Host":"localhost"`
+- For Docker, i.e., when running the API in Docker container: Use `"Host":"database"` (container name in docker-compose)
 
 Set the database password using one of these methods:
 - Add `DATABASE_PASSWORD=your_db_password` in the '.env' file
 - Pass as an environment variable to the docker compose command
-- Use a base-64 encoded password string and decode it when constructing the connection string (recommended for security)
+
+Security recommendation: Use a base-64 encoded password string and decode it when constructing the connection string.
 
 ## Quick Start
 
@@ -96,7 +95,7 @@ Set the database password using one of these methods:
 
 **Bash**
 ```bash
-curl -X POST "http://localhost:7126/api/orders" -H "Content-Type: application/json" -H "ApiKey: <your-api-key>" -d '{
+curl -X POST "http://localhost:5128/api/orders" -H "Content-Type: application/json" -H "ApiKey: <your-api-key>" -d '{
   "customerId": "4638e60b-e741-4e3b-b7f3-37419a5c8ad6",
   "totalAmount": 7000
 }'
@@ -104,8 +103,9 @@ curl -X POST "http://localhost:7126/api/orders" -H "Content-Type: application/js
 
 **Windows Command Prompt**
 ```
-curl -X POST "http://localhost:7126/api/orders" -H "Content-Type: application/json" -H "ApiKey: <your-api-key>" -d "{\"customerId\":\"4638e60b-e741-4e3b-b7f3-37419a5c8ad6\", \"totalAmount\": 5000}"
+curl -X POST "http://localhost:5128/api/orders" -H "Content-Type: application/json" -H "ApiKey: <your-api-key>" -d "{\"customerId\":\"4638e60b-e741-4e3b-b7f3-37419a5c8ad6\", \"totalAmount\": 5000}"
 ```
+Update the port in the url, based on how the API is run: Visual Studio (5128) / Docker (8080)
 
 ## Docker Commands
 
